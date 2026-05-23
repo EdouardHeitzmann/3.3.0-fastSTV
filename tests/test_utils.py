@@ -17,6 +17,7 @@ from votekit.utils import (
     first_place_votes,
     index_to_lexicographic_ballot,
     mentions,
+    mentions_from_numpy_arrays,
     resolve_profile_ties,
     score_dict_from_score_vector,
     score_dict_to_ranking,
@@ -275,6 +276,27 @@ def test_mentions_with_duplicates():
     test = mentions(profile_with_duplicates)
     assert correct == test
     assert isinstance(test["A"], float)
+
+
+def test_mentions_from_numpy_arrays():
+    correct = {"A": 9 / 2, "B": 9 / 2, "C": 7 / 2}
+    test = mentions_from_numpy_arrays(profile_no_ties.array_profile)
+
+    assert correct == test
+    assert isinstance(test["A"], float)
+
+
+def test_mentions_from_numpy_arrays_with_duplicates():
+    correct = {"A": 3 / 2, "B": 23 / 2, "C": 1 / 2}
+    test = mentions_from_numpy_arrays(profile_with_duplicates.array_profile)
+
+    assert correct == test
+    assert isinstance(test["A"], float)
+
+
+def test_mentions_from_numpy_arrays_errors():
+    with pytest.raises(TypeError, match="Profile must be of type NumpyRankProfile"):
+        mentions_from_numpy_arrays(cast(object, profile_no_ties))
 
 
 def test_fast_mentions():

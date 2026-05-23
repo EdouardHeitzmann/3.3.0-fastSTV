@@ -668,6 +668,12 @@ class RankProfile(PreferenceProfile):
             )
         return tuple(computed_ballots)
 
+    @cached_property
+    def array_profile(self):
+        from votekit.pref_profile.numpy_profile import rank_profile_to_numpy_profile
+
+        return rank_profile_to_numpy_profile(self)
+
     def __add__(self, other) -> RankProfile:
         """
         Add two PreferenceProfiles by combining their ballot lists.

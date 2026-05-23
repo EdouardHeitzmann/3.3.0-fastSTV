@@ -1,4 +1,5 @@
 from votekit.pref_profile.cleaned_pref_profile import CleanedRankProfile, CleanedScoreProfile
+from votekit.pref_profile.numpy_profile import NumpyRankProfile, rank_profile_to_numpy_profile
 from votekit.pref_profile.pref_profile import (
     PreferenceProfile,
     ProfileError,
@@ -31,6 +32,8 @@ __all__ = [
     "CleanedScoreProfile",
     "convert_row_to_rank_ballot",
     "convert_rank_profile_to_score_profile_via_score_vector",
+    "NumpyRankProfile",
+    "rank_profile_to_numpy_profile",
 ]
 
 # Patch __module__ on every exported symbol so that Sphinx autodoc displays

@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 from votekit.ballot import Ballot, RankBallot
 from votekit.pref_profile import RankProfile, ScoreProfile
+from votekit.pref_profile.numpy_profile import BLANK_RANKING_SENTINEL, NumpyRankProfile
 
 COLOR_LIST = [
     "#0099cd",
@@ -405,6 +406,37 @@ def _mentions_from_df(profile: RankProfile) -> dict[str, float]:
     totals = pd.Series(weights).groupby(exploded.to_numpy(), sort=False).sum()
 
     return {c: totals.get(c, 0.0) for c in profile.candidates}
+
+
+def mentions_from_numpy_arrays(profile: NumpyRankProfile) -> dict[str, float]:
+    """
+    Calculates total mentions for all candidates in a ``NumpyRankProfile``.
+
+    Args:
+        profile (NumpyRankProfile): Numpy-backed rank profile.
+
+    Returns:
+        dict[str, float]:
+            Dictionary mapping candidates to mention totals (values).
+    """
+    if not isinstance(profile, NumpyRankProfile):
+        raise TypeError("Profile must be of type NumpyRankProfile.")
+
+    if profile.ballot_matrix.size == 0:
+        return {c: 0.0 for c in profile.candidates}
+
+    valid_mask = profile.ballot_matrix != BLANK_RANKING_SENTINEL
+    if not valid_mask.any():
+        return {c: 0.0 for c in profile.candidates}
+
+    weights = np.repeat(profile.wt_vec, valid_mask.sum(axis=1))
+    mentions_by_index = np.bincount(
+        profile.ballot_matrix[valid_mask],
+        weights=weights,
+        minlength=len(profile.candidates),
+    )
+
+    return {candidate: float(mentions_by_index[idx]) for idx, candidate in enumerate(profile.candidates)}
 
 
 def mentions(profile: RankProfile) -> dict[str, float]:

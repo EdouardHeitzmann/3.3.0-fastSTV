@@ -10,6 +10,10 @@ from numpy.typing import NDArray
 
 from votekit.elections.election_state import ElectionState
 from votekit.pref_profile import RankProfile
+from votekit.pref_profile.numpy_profile import (
+    BLANK_RANKING_SENTINEL,
+    rank_profile_to_numpy_profile,
+)
 from votekit.utils import tiebreak_set
 
 QuotaType: TypeAlias = Literal["droop", "hare"]
@@ -144,27 +148,9 @@ class NumpySTVBase(ABC):
         Returns:
             tuple[NDArray, NDArray]: The ballot matrix and weights vector.
         """
-        df = pf.df.copy()
-        candidate_to_index = {frozenset([name]): i for i, name in enumerate(self.candidates)}
-        candidate_to_index[frozenset(["~"])] = int(
-            NumpySTVSentinel.BLANK_RANKING.value
-        )  # sentinel for blank/empty rankings after padding
-
-        ranking_columns = [c for c in df.columns if c.startswith("Ranking")]
-        num_rows = len(df)
-        num_cols = len(ranking_columns)
-        if num_cols > len(pf.candidates):
-            ranking_columns = ranking_columns[: len(pf.candidates)]
-            num_cols = len(ranking_columns)
-        cells = df[ranking_columns].to_numpy()
-
-        def map_cell(cell):
-            try:
-                return candidate_to_index[cell]
-            except KeyError:
-                raise TypeError(f"Found invalid entry: {cell}")
-
-        mapped = np.frompyfunc(map_cell, 1, 1)(cells).astype(np.int8)
+        array_profile = rank_profile_to_numpy_profile(pf)
+        mapped = array_profile.ballot_matrix
+        num_rows, num_cols = mapped.shape
 
         # Add padding -- a lot of the election logic needs at least one entry of
         # each row of the ballot matrix to be negative.
@@ -174,12 +160,12 @@ class NumpySTVBase(ABC):
         # which relies on having at least one entry in each row be 0.
         ballot_matrix: NDArray = np.full(
             (num_rows, num_cols + 1),
-            NumpySTVSentinel.BLANK_RANKING.value,
+            BLANK_RANKING_SENTINEL,
             dtype=np.int8,
         )
         ballot_matrix[:, :num_cols] = mapped
 
-        wt_vec: NDArray = df["Weight"].astype(np.float64).to_numpy()
+        wt_vec: NDArray = array_profile.wt_vec.copy()
 
         return ballot_matrix, wt_vec
 

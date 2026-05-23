@@ -407,7 +407,7 @@ def _mentions_from_df(profile: RankProfile) -> dict[str, float]:
     return {c: totals.get(c, 0.0) for c in profile.candidates}
 
 
-def fast_mentions(profile: RankProfile) -> dict[str, float]:
+def mentions(profile: RankProfile) -> dict[str, float]:
     """
     Decides which way to compute mentions based on whether ballots are materialized in the profile.
     If they are, uses the traditional mentions calculation.
@@ -424,12 +424,12 @@ def fast_mentions(profile: RankProfile) -> dict[str, float]:
         raise TypeError("Profile must be of type RankProfile.")
 
     if _ballots_are_materialized(profile):
-        return mentions(profile)
+        return _mentions_from_ballots(profile)
 
     return _mentions_from_df(profile)
 
 
-def mentions(
+def _mentions_from_ballots(
     profile: RankProfile,
 ) -> dict[str, float]:
     """

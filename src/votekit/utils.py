@@ -408,12 +408,41 @@ def _mentions_from_df(profile: RankProfile) -> dict[str, float]:
     return {c: totals.get(c, 0.0) for c in profile.candidates}
 
 
-def mentions_from_numpy_arrays(profile: NumpyRankProfile) -> dict[str, float]:
+def _normalize_frozen_fpv_indices(
+    profile: NumpyRankProfile, freeze_fpv: Sequence[str | int] | None
+) -> NDArray[np.intp]:
+    if freeze_fpv is None:
+        return np.empty(0, dtype=np.intp)
+
+    frozen_indices: list[int] = []
+    for frozen in freeze_fpv:
+        if isinstance(frozen, str):
+            try:
+                frozen_indices.append(profile.candidate_to_index[frozen])
+            except KeyError as exc:
+                raise ValueError(f"Unknown candidate in freeze_fpv: {frozen}") from exc
+        elif isinstance(frozen, (int, np.integer)):
+            frozen_idx = int(frozen)
+            if frozen_idx < 0 or frozen_idx >= len(profile.candidates):
+                raise ValueError(f"freeze_fpv index out of range: {frozen_idx}")
+            frozen_indices.append(frozen_idx)
+        else:
+            raise TypeError("freeze_fpv entries must be candidate strings or integer indices.")
+
+    return np.asarray(sorted(set(frozen_indices)), dtype=np.intp)
+
+
+def mentions_from_numpy_arrays(
+    profile: NumpyRankProfile, freeze_fpv: Sequence[str | int] | None = None
+) -> dict[str, float]:
     """
     Calculates total mentions for all candidates in a ``NumpyRankProfile``.
 
     Args:
         profile (NumpyRankProfile): Numpy-backed rank profile.
+        freeze_fpv (Sequence[str | int] | None, optional): Candidates to freeze out by
+            first-preference. Rows whose first entry is a frozen candidate are excluded from the
+            count, and frozen candidates are omitted from the returned dictionary.
 
     Returns:
         dict[str, float]:
@@ -422,21 +451,43 @@ def mentions_from_numpy_arrays(profile: NumpyRankProfile) -> dict[str, float]:
     if not isinstance(profile, NumpyRankProfile):
         raise TypeError("Profile must be of type NumpyRankProfile.")
 
+    frozen_indices = _normalize_frozen_fpv_indices(profile, freeze_fpv)
+    included_candidates = [
+        candidate
+        for idx, candidate in enumerate(profile.candidates)
+        if idx not in set(frozen_indices.tolist())
+    ]
+
     if profile.ballot_matrix.size == 0:
-        return {c: 0.0 for c in profile.candidates}
+        return {c: 0.0 for c in included_candidates}
 
-    valid_mask = profile.ballot_matrix != BLANK_RANKING_SENTINEL
+    ballot_matrix = profile.ballot_matrix
+    wt_vec = profile.wt_vec
+
+    if frozen_indices.size > 0:
+        row_mask = ~np.isin(ballot_matrix[:, 0], frozen_indices)
+        ballot_matrix = ballot_matrix[row_mask]
+        wt_vec = wt_vec[row_mask]
+
+    if ballot_matrix.size == 0:
+        return {c: 0.0 for c in included_candidates}
+
+    valid_mask = ballot_matrix != BLANK_RANKING_SENTINEL
     if not valid_mask.any():
-        return {c: 0.0 for c in profile.candidates}
+        return {c: 0.0 for c in included_candidates}
 
-    weights = np.repeat(profile.wt_vec, valid_mask.sum(axis=1))
+    weights = np.repeat(wt_vec, valid_mask.sum(axis=1))
     mentions_by_index = np.bincount(
-        profile.ballot_matrix[valid_mask],
+        ballot_matrix[valid_mask],
         weights=weights,
         minlength=len(profile.candidates),
     )
 
-    return {candidate: float(mentions_by_index[idx]) for idx, candidate in enumerate(profile.candidates)}
+    return {
+        candidate: float(mentions_by_index[idx])
+        for idx, candidate in enumerate(profile.candidates)
+        if idx not in set(frozen_indices.tolist())
+    }
 
 
 def mentions(profile: RankProfile) -> dict[str, float]:

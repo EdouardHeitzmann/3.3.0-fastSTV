@@ -25,6 +25,7 @@ from votekit.elections.election_types.ranking.stv.numpy_stv_base import (
 from votekit.elections.election_types.ranking.stv.utils import numpy_random_transfer
 from votekit.elections.transfers import fractional_transfer
 from votekit.pref_profile import ProfileError, RankProfile
+from votekit.pref_profile.numpy_profile import BLANK_RANKING_SENTINEL, NumpyRankProfile
 from votekit.utils import (
     _first_place_votes_from_df_no_ties,
     ballots_by_first_cand,
@@ -44,7 +45,7 @@ class NumpyInnerSTV(NumpySTVBase):
 
     def __init__(
         self,
-        profile: RankProfile,
+        profile: RankProfile | NumpyRankProfile,
         n_seats=1,
         transfer: TransferType = "fractional",
         quota: QuotaType | None = "droop",
@@ -57,7 +58,7 @@ class NumpyInnerSTV(NumpySTVBase):
         Initialize an STV election with advanced options.
 
         Args:
-            profile (RankProfile): RankProfile to run election on.
+            profile (RankProfile | NumpyRankProfile): Profile to run election on.
             n_seats (int): Number of seats to be elected. Defaults to 1.
             transfer (TransferType, optional): Transfer method to be used. Accepts
                 "fractional", "fractional_random", "cambridge_random", and "random".
@@ -89,28 +90,37 @@ class NumpyInnerSTV(NumpySTVBase):
         self._run_and_store()
 
     def __check_profile_and_seats_and_candidates_and_transfer(
-        self, profile: RankProfile, n_seats: int, transfer: TransferType
+        self, profile: RankProfile | NumpyRankProfile, n_seats: int, transfer: TransferType
     ):
         """
         Initial validation of the arguments passed to the STV election.
 
         Does the following:
-            - Checks if the profile is a RankProfile,
+            - Checks if the profile is a RankProfile or NumpyRankProfile,
             - Checks if the number of seats is positive,
             - Checks if there are enough candidates to fill the seats,
             - Checks if the transfer method is implemented.
             - Warns the user that the "random" transfer is ambiguous if chosen.
 
         Args:
-            profile (RankProfile): The preference profile to validate.
+            profile (RankProfile | NumpyRankProfile): The preference profile to validate.
             n_seats (int): The number of seats to be elected.
             transfer (TransferType): The transfer method to be used.
         """
-        if not isinstance(profile, RankProfile):
-            raise ProfileError("Profile must be of type RankProfile.")
+        if not isinstance(profile, (RankProfile, NumpyRankProfile)):
+            raise ProfileError("Profile must be of type RankProfile or NumpyRankProfile.")
         if n_seats <= 0:
             raise ValueError("n_seats must be positive.")
-        elif len(profile.candidates_cast) < n_seats:
+
+        if isinstance(profile, RankProfile):
+            candidates_with_votes = len(profile.candidates_cast)
+        else:
+            row_mask = profile.wt_vec > 0
+            valid_entries = profile.ballot_matrix[row_mask]
+            valid_entries = valid_entries[valid_entries != BLANK_RANKING_SENTINEL]
+            candidates_with_votes = len(np.unique(valid_entries)) if valid_entries.size else 0
+
+        if candidates_with_votes < n_seats:
             raise ValueError("Not enough candidates received votes to be elected.")
         if transfer not in [
             "fractional",
@@ -508,7 +518,7 @@ class FastSTV(NumpyInnerSTV):
 
     def __init__(
         self,
-        profile: RankProfile,
+        profile: RankProfile | NumpyRankProfile,
         n_seats: int | None = None,
         transfer: TransferType = "fractional",
         quota: QuotaType | None = "droop",
@@ -520,7 +530,7 @@ class FastSTV(NumpyInnerSTV):
         Initialize a fast STV election.
 
         Args:
-            profile (RankProfile): RankProfile to run election on.
+            profile (RankProfile | NumpyRankProfile): Profile to run election on.
             n_seats (int, optional): Number of seats to be elected. Defaults to 1.
             transfer (TransferType, optional): Transfer method to be used. Accepts
                 "fractional", "random", "fractional_random", and "cambridge_random".
@@ -562,7 +572,7 @@ class AlbanySTV(NumpyInnerSTV):
 
     def __init__(
         self,
-        profile: RankProfile,
+        profile: RankProfile | NumpyRankProfile,
         n_seats: int | None = None,
         transfer: TransferType = "fractional",
         quota: QuotaType | None = "droop",
@@ -574,7 +584,7 @@ class AlbanySTV(NumpyInnerSTV):
         Initialize an Albany STV election.
 
         Args:
-            profile (RankProfile): RankProfile to run election on.
+            profile (RankProfile | NumpyRankProfile): Profile to run election on.
             n_seats (int, optional): Number of seats to be elected. Defaults to 1.
             transfer (TransferType, optional): Transfer method to be used. Accepts
                 "fractional", "random", "fractional_random", and "cambridge_random".
@@ -615,7 +625,7 @@ class FastIRV(NumpyInnerSTV):
 
     def __init__(
         self,
-        profile: RankProfile,
+        profile: RankProfile | NumpyRankProfile,
         quota: QuotaType | None = "droop",
         tiebreak: TiebreakType | None = None,
     ):
@@ -623,7 +633,7 @@ class FastIRV(NumpyInnerSTV):
         Initialize a fast IRV election.
 
         Args:
-            profile (RankProfile): RankProfile to run election on.
+            profile (RankProfile | NumpyRankProfile): Profile to run election on.
             quota (QuotaType, optional): Formula to calculate quota. Accepts "droop" or "hare".
                 Defaults to "droop".
             tiebreak (TiebreakType | None, optional): Method to be used if a
@@ -653,7 +663,7 @@ class FastSequentialRCV(NumpyInnerSTV):
 
     def __init__(
         self,
-        profile: RankProfile,
+        profile: RankProfile | NumpyRankProfile,
         n_seats: int | None = None,
         quota: QuotaType | None = "droop",
         simultaneous: bool | None = True,
@@ -664,7 +674,7 @@ class FastSequentialRCV(NumpyInnerSTV):
         Initialize a fast sequential RCV election.
 
         Args:
-            profile (RankProfile): RankProfile to run election on.
+            profile (RankProfile | NumpyRankProfile): Profile to run election on.
             n_seats (int, optional): Number of seats to be elected. Defaults to 1.
             quota (QuotaType, optional): Formula to calculate quota. Accepts "droop" or "hare".
                 Defaults to "droop".

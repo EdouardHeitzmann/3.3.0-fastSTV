@@ -12,6 +12,10 @@ from votekit.elections.election_state import ElectionState
 from votekit.pref_profile import RankProfile
 from votekit.pref_profile.numpy_profile import (
     BLANK_RANKING_SENTINEL,
+    NumpyRankProfile,
+    left_compact_ballot_matrix,
+    numpy_profile_to_rank_profile,
+    reindex_candidate_indices,
     rank_profile_to_numpy_profile,
 )
 from votekit.utils import tiebreak_set
@@ -19,6 +23,7 @@ from votekit.utils import tiebreak_set
 QuotaType: TypeAlias = Literal["droop", "hare"]
 TiebreakType: TypeAlias = Literal["borda", "random", "first_place"]
 TransferType: TypeAlias = Literal["fractional", "fractional_random", "cambridge_random", "random"]
+AcceptedRankProfile: TypeAlias = RankProfile | NumpyRankProfile
 
 
 class ElectionPlay(TypedDict):
@@ -81,7 +86,7 @@ class NumpySTVBase(ABC):
     Attributes:
         candidates (list[str]): List of candidate names, indexed
             to correspond to ballot matrix entries.
-        profile (RankProfile): The original RankProfile for reference.
+        profile (AcceptedRankProfile): The original profile for reference.
         n_seats (int): Number of seats to be elected.
         election_states (list[ElectionState]): List of ElectionState objects representing
             each round in chronological order.
@@ -94,7 +99,7 @@ class NumpySTVBase(ABC):
     """
 
     candidates: list[str]
-    profile: RankProfile
+    profile: AcceptedRankProfile
     n_seats: int
     election_states: list[ElectionState]
     threshold: float
@@ -105,7 +110,7 @@ class NumpySTVBase(ABC):
 
     def __init__(
         self,
-        profile: RankProfile,
+        profile: AcceptedRankProfile,
         n_seats: int = 1,
         tiebreak: TiebreakType | None = None,
     ):
@@ -113,7 +118,7 @@ class NumpySTVBase(ABC):
         Initialize the numpy STV base.
 
         Args:
-            profile (RankProfile): RankProfile to run election on.
+            profile (AcceptedRankProfile): Profile to run election on.
             n_seats (int, optional): Number of seats to be elected. Defaults to 1.
             tiebreak (TiebreakType | None, optional): Method to be used if a tiebreak is needed.
                 Defaults to None. Accepts "borda", "random", and "first_place".
@@ -138,17 +143,17 @@ class NumpySTVBase(ABC):
     # == Init Methods ==
     # ==================
 
-    def _convert_profile_to_numpy_arrays(self, pf: RankProfile) -> tuple[NDArray, NDArray]:
+    def _convert_profile_to_numpy_arrays(self, pf: AcceptedRankProfile) -> tuple[NDArray, NDArray]:
         """
         This converts the profile into a numpy matrix with some helper arrays for faster iteration.
 
         Args:
-            pf (RankProfile): The preference profile to convert.
+            pf (AcceptedRankProfile): The preference profile to convert.
 
         Returns:
             tuple[NDArray, NDArray]: The ballot matrix and weights vector.
         """
-        array_profile = rank_profile_to_numpy_profile(pf)
+        array_profile = pf if isinstance(pf, NumpyRankProfile) else rank_profile_to_numpy_profile(pf)
         mapped = array_profile.ballot_matrix
         num_rows, num_cols = mapped.shape
 
@@ -168,6 +173,11 @@ class NumpySTVBase(ABC):
         wt_vec: NDArray = array_profile.wt_vec.copy()
 
         return ballot_matrix, wt_vec
+
+    def _materialize_rank_profile(self, round_number: int = -1) -> RankProfile:
+        if isinstance(self.profile, RankProfile):
+            return self.profile
+        return self.get_profile(round_number)
 
     def _make_election_states(self):
         """
@@ -423,6 +433,44 @@ class NumpySTVBase(ABC):
         status_df = status_df.reindex(new_index)
         return status_df
 
+    def get_score_df(elec, show_quota=True, starting_round=0) -> pd.DataFrame:
+        fpv_by_round = elec._data.fpv_by_round
+
+        list_ranking = list(elec.get_ranking())
+        permutation = [elec.candidates.index(c) for s in list_ranking for c in (s if isinstance(s, frozenset) else [s])]
+        permuted_fpv_by_round = [fpv[permutation] for fpv in fpv_by_round]
+
+        if hasattr(elec, "_quota_by_round") and show_quota:
+            quota_by_round = elec._quota_by_round
+            fpv_by_round = [np.append(fpv, quota) for fpv, quota in zip(permuted_fpv_by_round, quota_by_round)]
+            list_ranking.append("Quota")
+            permutation.append(len(elec.candidates))
+        elif hasattr(elec, "threshold") and show_quota:
+            quota = elec.threshold
+            fpv_by_round = [np.append(fpv, quota) for fpv in permuted_fpv_by_round]
+            list_ranking.append("Quota")
+            permutation.append(len(elec.candidates))
+            
+        score_df = pd.DataFrame(fpv_by_round).T
+        score_df.index = [c for s in list_ranking for c in (s if isinstance(s, frozenset) else [s])]
+        
+        score_df = score_df.round(2)
+        score_df.columns = [f"Round {i}" for i in range(score_df.shape[1])]
+
+        # detect and fix if any of the top m rows have 0s
+        if (score_df.iloc[:elec.n_seats] == 0).any().any():
+            # first convert the df to contain python object instead of floats
+            score_df = score_df.astype(object)
+            score_df.iloc[:elec.n_seats] = score_df.iloc[:elec.n_seats].replace(0, "Elected")
+
+        if starting_round > 0:
+            score_df = score_df.iloc[:, starting_round:]
+            score_df.columns = [f"Round {i}" for i in range(starting_round, starting_round + score_df.shape[1])]
+            # also shave off rows if their first column entry is 0
+            score_df = score_df[score_df.iloc[:, 0] != 0]
+
+        return score_df
+
     def get_profile(self, round_number: int = -1) -> RankProfile:
         """
         Return the RankProfile of the given round number.
@@ -451,58 +499,40 @@ class NumpySTVBase(ABC):
                 wt_vec = play["wt_vec"]
                 break
 
-        idx_to_fset = {c: frozenset([self.candidates[c]]) for c in remaining}
-
         # --- 1) drop last column by view (sentinel column) ---
         A = self._data.ballot_matrix[:, :-1]
-
-        n_rows, n_cols = A.shape
 
         # --- 2) keep only entries in `remaining` ---
         remaining_arr = np.fromiter((int(x) for x in remaining), dtype=np.int64)
         keep_mask = np.isin(A, remaining_arr)
 
         # --- 3) stable left-compaction, fill with -127 ---
-        out = np.full_like(A, fill_value=NumpySTVSentinel.BLANK_RANKING.value)  # int8
-        pos = keep_mask.cumsum(axis=1) - 1  # target col for each kept entry
-        r_idx, c_idx = np.nonzero(keep_mask)
-        out[r_idx, pos[r_idx, c_idx]] = A[r_idx, c_idx]
+        filtered = np.full_like(A, fill_value=NumpySTVSentinel.BLANK_RANKING.value)
+        filtered[keep_mask] = A[keep_mask]
+        out = left_compact_ballot_matrix(filtered, NumpySTVSentinel.BLANK_RANKING.value)
 
         # --- 3.5) drop rows that are empty after filtering AND rows with weight 0 ---
         # keep rows that have at least one remaining candidate and nonzero weight
         row_keep_mask = ~(out == NumpySTVSentinel.BLANK_RANKING.value).all(axis=1) & (wt_vec != 0)
         out = out[row_keep_mask]
         wt_vec = wt_vec[row_keep_mask]
-        n_rows = out.shape[0]
+        remaining_candidates = tuple([self.candidates[c] for c in remaining])
 
-        # --- 4) int8 -> frozenset mapping via 256-entry LUT ---
-        # default for anything missing (including -127): frozenset("~")
-        lut: np.ndarray = np.empty(256, dtype=object)
-        lut[:] = frozenset(["~"])
-        for k, v in idx_to_fset.items():
-            lut[int(np.int16(k)) + 128] = v
-        # index into LUT (shift by +128 to map [-128,127] -> [0,255])
-        obj = lut[out.astype(np.int16, copy=False) + 128]  # dtype=object, frozensets
-
-        # --- 5) to DataFrame with Ranking_i columns ---
-        data = {f"Ranking_{i + 1}": obj[:, i] for i in range(n_cols)}
-        df = pd.DataFrame(data)
-
-        # --- 6) Ballot Index column & set as index ---
-        df.insert(0, "Ballot Index", np.arange(n_rows, dtype=int))
-        df.set_index("Ballot Index", inplace=True)
-
-        # --- 7) Voter Set: empty set per row (distinct objects) ---
-        df["Voter Set"] = pd.Series([set() for _ in range(n_rows)], dtype=object, index=df.index)
-
-        # --- 8) Weight column ---
-        df["Weight"] = wt_vec.astype(np.float64, copy=False)
-
-        return RankProfile(
-            max_ranking_length=self.profile.max_ranking_length,
-            candidates=tuple([self.candidates[c] for c in remaining]),
-            df=df,
+        out = reindex_candidate_indices(
+            out,
+            {self.candidates[candidate_index]: int(candidate_index) for candidate_index in remaining},
+            remaining_candidates,
+            BLANK_RANKING_SENTINEL,
         )
+
+        round_profile = NumpyRankProfile(
+            ballot_matrix=out,
+            wt_vec=wt_vec.astype(np.float64, copy=False),
+            candidates=remaining_candidates,
+            metadata={"sentinel": int(BLANK_RANKING_SENTINEL)},
+        )
+
+        return numpy_profile_to_rank_profile(round_profile)
 
     def get_step(self, round_number: int = -1) -> tuple[RankProfile, ElectionState]:
         """
@@ -628,9 +658,14 @@ class NumpySTVBase(ABC):
                 tied_winners, winner_tiebreak_bool=True
             )
         elif self._winner_tiebreak is not None:
+            tiebreak_profile = (
+                None
+                if self._winner_tiebreak == "random"
+                else self._materialize_rank_profile(round_number)
+            )
             packaged_ranking = tiebreak_set(
                 r_set=packaged_tie,
-                profile=self.profile,
+                profile=tiebreak_profile,
                 tiebreak=self._winner_tiebreak,
             )
             winner_idx = self.candidates.index(list(packaged_ranking[0])[0])
@@ -663,9 +698,14 @@ class NumpySTVBase(ABC):
                 tied_losers, winner_tiebreak_bool=False
             )
         else:
+            tiebreak_profile = (
+                None
+                if self._loser_tiebreak == "random"
+                else self._materialize_rank_profile(round_number)
+            )
             packaged_ranking = tiebreak_set(
                 r_set=packaged_tie,
-                profile=self.profile,
+                profile=tiebreak_profile,
                 tiebreak=self._loser_tiebreak,
             )
             loser_idx = self.candidates.index(list(packaged_ranking[-1])[0])

@@ -12,6 +12,7 @@ from votekit.elections.election_types.ranking.stv.numpy_stv_base import (
     NumpySTVBase,
     TiebreakType,
 )
+from votekit.pref_profile.numpy_profile import NumpyRankProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +119,7 @@ class MeekSTV(NumpySTVBase):
 
     def __init__(
         self,
-        profile: RankProfile,
+        profile: RankProfile | NumpyRankProfile,
         n_seats: int = 1,
         tiebreak: TiebreakType | None = None,
         tolerance: float | None = 1e-6,
@@ -129,7 +130,7 @@ class MeekSTV(NumpySTVBase):
         Initialize a Meek STV election with advanced options.
 
         Args:
-            profile (RankProfile): RankProfile to run election on.
+            profile (RankProfile | NumpyRankProfile): Profile to run election on.
             n_seats (int): Number of seats to be elected. Defaults to 1.
             tiebreak (TiebreakType | None, optional): Method to be used if a tiebreak is
                 needed. Accepts "borda", "random", and "cambridge_random". Defaults to None,

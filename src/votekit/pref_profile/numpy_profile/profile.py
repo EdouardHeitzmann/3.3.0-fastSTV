@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import numpy as np
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
@@ -11,10 +12,11 @@ if TYPE_CHECKING:
 
 BLANK_RANKING_SENTINEL = np.int8(-127)
 
+
 @dataclass(frozen=True, slots=True)
 class NumpyRankProfile:
-    ballot_matrix: NDArray[np.integer]   # shape: n_ballots x max_ranking_length
-    wt_vec: NDArray[np.floating]         # shape: n_ballots
+    ballot_matrix: NDArray[np.integer]
+    wt_vec: NDArray[np.floating]
     candidates: tuple[str, ...]
     metadata: dict[str, Any]
 
@@ -42,6 +44,7 @@ def rank_profile_to_numpy_profile(profile: RankProfile) -> NumpyRankProfile:
         ranking_columns = ranking_columns[: len(profile.candidates)]
 
     candidate_to_index = {frozenset([name]): i for i, name in enumerate(profile.candidates)}
+    candidate_to_index[frozenset()] = int(BLANK_RANKING_SENTINEL)
     candidate_to_index[frozenset(["~"])] = int(BLANK_RANKING_SENTINEL)
 
     cells = profile.df[ranking_columns].to_numpy() if ranking_columns else np.empty(

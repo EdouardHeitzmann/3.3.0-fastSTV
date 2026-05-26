@@ -294,9 +294,31 @@ def test_mentions_from_numpy_arrays_with_duplicates():
     assert isinstance(test["A"], float)
 
 
+def test_mentions_from_numpy_arrays_freeze_fpv_by_candidate():
+    correct = {"B": 3, "C": 3}
+    test = mentions_from_numpy_arrays(profile_no_ties.array_profile, freeze_fpv=["A"])
+
+    assert correct == test
+    assert "A" not in test
+
+
+def test_mentions_from_numpy_arrays_freeze_fpv_by_index():
+    correct = {"A": 9 / 2, "C": 7 / 2}
+    test = mentions_from_numpy_arrays(profile_no_ties.array_profile, freeze_fpv=[1])
+
+    assert correct == test
+    assert "B" not in test
+
+
 def test_mentions_from_numpy_arrays_errors():
     with pytest.raises(TypeError, match="Profile must be of type NumpyRankProfile"):
         mentions_from_numpy_arrays(cast(object, profile_no_ties))
+
+    with pytest.raises(ValueError, match="Unknown candidate in freeze_fpv"):
+        mentions_from_numpy_arrays(profile_no_ties.array_profile, freeze_fpv=["D"])
+
+    with pytest.raises(ValueError, match="freeze_fpv index out of range"):
+        mentions_from_numpy_arrays(profile_no_ties.array_profile, freeze_fpv=[99])
 
 
 def test_fast_mentions():
